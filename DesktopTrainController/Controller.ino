@@ -147,7 +147,7 @@ const int PCComMap[TRAIN_DATA_NUMBER] = {SPEED, REVERSER, POWER, BRAKE, SIGNAL, 
 class DevicesManager
 {
 public:
-	DevicesManager(int devicePins[], const int deviceType[], const funcPoint Interrupts[])
+	DevicesManager(const int devicePins[], const int deviceType[], const funcPoint Interrupts[])
 	{
 		//define gpio mode
 		for (int i = 0; i < DEVICE_NUMBER; i++)
@@ -169,14 +169,6 @@ public:
 		return READY;
 	}
 };
-
-TrainManager Timeline[QUEUE_CAP] = {_QUE, _QUE, _QUE, _QUE,
-                                    _QUE, _QUE, _QUE, _QUE,
-                                    _QUE, _QUE, _QUE, _QUE,
-                                    _QUE, _QUE, _QUE, _QUE,
-                                    _QUE, _QUE, _QUE, _QUE
-                                   };
-TrainManager currentData(dataDefault);
 
 class TrainManager
 {
@@ -206,6 +198,15 @@ public:
 	}
 };
 
+
+TrainManager Timeline[QUEUE_CAP] = {_QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE
+                                   };
+TrainManager currentData(dataDefault);
+
 class CommunicationManager
 {
 private:
@@ -221,7 +222,7 @@ public:
 		sendData = NO_DATA;
 	}
 
-	bool RecieveDataFromPC(DevicesManager &p)
+	bool RecieveDataFromPC(TrainManager &p)
 	{
 		int length, st, ed, pos;
 		String tmp = NO_DATA;
@@ -260,7 +261,7 @@ public:
 			if (recieveData.charAt(i) == FILTER)
 			{
 				//send data to TrainManager
-				p->SetData(PCComMap[pos++], tmp.toInt());
+				p.SetData(PCComMap[pos++], tmp.toInt());
 				//clear tmp
 				tmp = NO_DATA;
 			}
@@ -268,7 +269,7 @@ public:
 		return true;
 	}
 	//
-	bool SendDataToPC(DevicesManager &p)
+	bool SendDataToPC(TrainManager &p)
 	{
 		sendData = NO_DATA;
 		//add start symbol
@@ -276,7 +277,7 @@ public:
 		//add contents
 		for (int i = 0; i < TRAIN_DATA_NUMBER; i++)
 		{
-			sendData += p->GetData(PCComMap[i]);
+			sendData += p.GetData(PCComMap[i]);
 			sendData += FILTER;
 		}
 		//add end symbol
@@ -288,12 +289,12 @@ public:
 		return true;
 	}
 	//send data to HMI
-	bool SendDataToHMI(DevicesManager &p)
+	bool SendDataToHMI(TrainManager &p)
 	{
 		String sender = NO_DATA;
 		for (int i = 0; i < TRAIN_DATA_NUMBER; i++)
 		{
-			sender = HMIScript[HMIMap[i]] + p->GetData(PCComMap[i]);
+			sender = HMIScript[HMIMap[i]] + p.GetData(PCComMap[i]);
 			if (!sender.length())return false;
 			Serial1.print(sender);
 			for (int j = 0; j < 3; j++)Serial1.write(HMI_END_SYM);
@@ -316,7 +317,6 @@ public:
 	//
 	bool AddProc(TrainManager &p)
 	{
-		if (!p)return false;
 		if (taskCnt >= QUEUE_CAP)
 		{
 			Timeline[taskCnt - 1] = p;
@@ -329,17 +329,17 @@ public:
 	//
 	bool GetQueueTop()
 	{
-		if (!tskCnt)return EMPTY_QUERY;
+		if (!taskCnt)return EMPTY_QUERY;
 		currentData = Timeline[0];
 		//repos
 		for (int i = 1; i < taskCnt; i++)
 			Timeline[i - 1] = Timeline[i];
-		tskCnt--;
+		taskCnt--;
 		return true;
 	}
 };
 
-DevicesManager Devices(devicePins, deviceType, Interrupts);
+DevicesManager Devices(devicePins, deviceType, Interrputs);
 CommunicationManager Communication;
 TaskManager Queue;
 
@@ -347,9 +347,9 @@ void TimerInterrupt()
 {
 	Timer.stop();
 	Queue.GetQueueTop();
-	communication.SendDataToPC(currentData);
+	Communication.SendDataToPC(currentData);
 	Communication.RecieveDataFromPC(currentData);
-	communication.SendDataToHMI(currentData);
+	Communication.SendDataToHMI(currentData);
 	Timer.start();
 }
 
@@ -368,7 +368,7 @@ void interrupt0()
 {
 	TrainManager tmp = currentData;
 	//single handle
-	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(REVERSER) == REVERSER_NEUTRAL)return;
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MASTER_KEY) || tmp.GetData(REVERSER) == REVERSER_NEUTRAL)return;
 	//
 	int currentBrake = tmp.GetData(BRAKE);
 	int currentPower = tmp.GetData(POWER);
@@ -390,7 +390,7 @@ void interrupt1()
 {
 	TrainManager tmp = currentData;
 	//single handle
-	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(REVERSER) == REVERSER_NEUTRAL)return;
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MASTER_KEY) || tmp.GetData(REVERSER) == REVERSER_NEUTRAL)return;
 	//
 	int currentBrake = tmp.GetData(BRAKE);
 	int currentPower = tmp.GetData(POWER);
@@ -411,7 +411,7 @@ void interrupt1()
 void interrupt2()
 {
 	TrainManager tmp = currentData;
-	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(POWER) != POWER_MIN)return;
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MASTER_KEY) || tmp.GetData(POWER) != POWER_MIN)return;
 	if (Devices.GetDeviceState(2, devicePins) == ACTIVE)tmp.SetData(REVERSER, REVERSER_FORWARD);
 	else tmp.SetData(REVERSER, REVERSER_NEUTRAL);
 	Queue.AddProc(tmp);
@@ -421,7 +421,7 @@ void interrupt2()
 void interrupt3()
 {
 	TrainManager tmp = currentData;
-	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(POWER) != POWER_MIN)return;
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MASTER_KEY) || tmp.GetData(POWER) != POWER_MIN)return;
 	if (Devices.GetDeviceState(3, devicePins) == ACTIVE)tmp.SetData(REVERSER, REVERSER_FORWARD);
 	else tmp.SetData(REVERSER, REVERSER_NEUTRAL);
 	Queue.AddProc(tmp);
@@ -431,7 +431,7 @@ void interrupt3()
 void interrupt4()
 {
 	TrainManager tmp = currentData;
-	if (!tmp.GetData(MasterKey))return;
+	if (!tmp.GetData(MASTER_KEY))return;
 	if (Devices.GetDeviceState(4, devicePins) == ACTIVE)tmp.SetData(HORN, HORN_ON);
 	else tmp.SetData(HORN, HORN_OFF);
 	Queue.AddProc(tmp);
@@ -441,8 +441,8 @@ void interrupt4()
 void interrupt5()
 {
 	TrainManager tmp = currentData;
-	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || !tmp.GetData(SPEED))return;
-	tmp.SetReversal(SPEED_CONST)
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MASTER_KEY) || !tmp.GetData(SPEED))return;
+	tmp.SetReversal(SPEED_CONST);
 	Queue.AddProc(tmp);
 	return;
 }
@@ -450,7 +450,7 @@ void interrupt5()
 void interrupt6()
 {
 	TrainManager tmp = currentData;
-	if (!tmp.GetData(MasterKey))return;
+	if (!tmp.GetData(MASTER_KEY))return;
 	if (Devices.GetDeviceState(6, devicePins) == ACTIVE)tmp.SetData(EMERGENCY, EMERGENCY_ON);
 	else tmp.SetData(EMERGENCY, EMERGENCY_OFF);
 	Queue.AddProc(tmp);
