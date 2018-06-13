@@ -457,7 +457,7 @@ void interrupt6()
 	return;
 }
 
-void interrupt6()
+void interrupt7()
 {
 	TrainManager tmp = currentData;
 	if (Devices.GetDeviceState(7, devicePins) == ACTIVE)tmp.SetData(MASTER_KEY, MASTER_KEY_ON);
