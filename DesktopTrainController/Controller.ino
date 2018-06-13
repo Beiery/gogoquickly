@@ -63,6 +63,8 @@
 #define SPEED_CONST_MAX 400
 #define MASTER_KEY_OFF 0
 #define MASTER_KEY_ON 1
+#define EMERGENCY_ON 1
+#define EMERGENCY_OFF 0
 //Devices
 #define DEVICE_NUMBER 8
 #define DEVICE_TYPE_NUMBER 3
@@ -71,7 +73,7 @@
 #define NO_READY 0
 #define READY 1
 //Train
-#define TRAIN_DATA_NUMBER 10
+#define TRAIN_DATA_NUMBER 11
 #define _INT 0
 #define _BOOL 1
 #define SPEED 0
@@ -84,17 +86,22 @@
 #define HORN 7
 #define SPEED_CONST 8
 #define MASTER_KEY 9
+#define EMERGENCY 10
 //HMI
 #define HMI_SCRIPT_NUM 11
-#define HMI_END_SYM 10
+#define HMI_END_SYM 0xFF
 //PC
 #define FILTER '|'
 #define START_SYM '#'
 #define END_SYM '!'
-#define RECIEVE_DELAY 10
-#define SEND_DELAY 10
+#define NO_DATA ""
+#define RECIEVE_DELAY 2
+#define SEND_DELAY 100
 #define TIMER_TICK 100
 //
+#define EMPTY_QUERY 0
+#define QUEUE_CAP 20
+#define _QUE TrainManager(dataDefault)
 typedef void (*funcPoint)();
 //
 /*
@@ -121,6 +128,7 @@ void interrupt4();
 void interrupt5();
 void interrupt6();
 void interrupt7();
+void TimerInterrupt();
 
 //change device type here
 const int deviceType[DEVICE_NUMBER] = {SWITCH_F, SWITCH_F, SWITCH_C, SWITCH_C, SWITCH_C, SWITCH_C, SWITCH_C, SWITCH_C};
@@ -129,16 +137,17 @@ const funcPoint Interrputs[DEVICE_NUMBER] = {interrupt0, interrupt1, interrupt2,
 //all use PULL_UP gpio mode
 const int devicePins[DEVICE_NUMBER] = {30, 31, 32, 33, 34, 35, 36, 37};
 //train data id
-const int dataDefault[TRAIN_DATA_NUMBER] = {SPEED_MIN, REVERSER_NEUTRAL, POWER_MIN, BRAKE_MIN, SIGNAL_RED, SIGNAL_DISTANCE_DE, SPEED_LIMIT_DEF, HORN_OFF, SPEED_CONST_MIN, MASTER_KEY_OFF};
-const int dataType[TRAIN_DATA_NUMBER] = {_INT, _INT, _INT, _INT, _INT, _INT, _INT, _BOOL, _INT, _BOOL};
+const int dataDefault[TRAIN_DATA_NUMBER] = {SPEED_MIN, REVERSER_NEUTRAL, POWER_MIN, BRAKE_MIN, SIGNAL_RED, SIGNAL_DISTANCE_DE, SPEED_LIMIT_DEF, HORN_OFF, SPEED_CONST_MIN, MASTER_KEY_OFF, EMERGENCY_OFF};
+const int dataType[TRAIN_DATA_NUMBER] = {_INT, _INT, _INT, _INT, _INT, _INT, _INT, _BOOL, _INT, _BOOL, _BOOL};
 //communication
-const String HMIScript[HMI_SCRIPT_NUM] = { "spd.val=", "reserver.val=", "pwr.val=", "brake.val=", "sig.val=", "sigdis.val=", "spdlim.val=", "horn.val=", "speedconst.val=", "mstkey.val=", "0xFF"};
-const int HMIMap[TRAIN_DATA_NUMBER] = {SPEED, REVERSER, POWER, BRAKE, SIGNAL, SIGNAL_DISTANCE, SPEED_LIMIT, HORN, SPEED_CONST, MASTER_KEY};
+const String HMIScript[HMI_SCRIPT_NUM] = { "spd.val=", "reserver.val=", "pwr.val=", "brake.val=", "sig.val=", "sigdis.val=", "spdlim.val=", "horn.val=", "speedconst.val=", "mstkey.val=", "emg.val="};
+const int HMIMap[TRAIN_DATA_NUMBER] = {SPEED, REVERSER, POWER, BRAKE, SIGNAL, SIGNAL_DISTANCE, SPEED_LIMIT, HORN, SPEED_CONST, MASTER_KEY, EMERGENCY};
+const int PCComMap[TRAIN_DATA_NUMBER] = {SPEED, REVERSER, POWER, BRAKE, SIGNAL, SIGNAL_DISTANCE, SPEED_LIMIT, HORN, SPEED_CONST, MASTER_KEY, EMERGENCY};
 
 class DevicesManager
 {
 public:
-	Initialize(int devicePins[], const int deviceType[], const funcPoint Interrupts[])
+	DevicesManager(int devicePins[], const int deviceType[], const funcPoint Interrupts[])
 	{
 		//define gpio mode
 		for (int i = 0; i < DEVICE_NUMBER; i++)
@@ -161,11 +170,19 @@ public:
 	}
 };
 
+TrainManager Timeline[QUEUE_CAP] = {_QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE,
+                                    _QUE, _QUE, _QUE, _QUE
+                                   };
+TrainManager currentData(dataDefault);
+
 class TrainManager
 {
 public:
 	int trainData[TRAIN_DATA_NUMBER];
-	Initialize(const int dataDefault[])
+	TrainManager(const int dataDefault[])
 	{
 		//set default data to Train Manager
 		for (int i = 0; i < TRAIN_DATA_NUMBER; i++)
@@ -191,10 +208,273 @@ public:
 
 class CommunicationManager
 {
+private:
+	String recieveData;
+	String sendData;
 public:
-	Initialize()
+	CommunicationManager()
 	{
 		Serial.begin(115200);
 		Serial1.begin(115200);
+		//reset the recieved data
+		recieveData = NO_DATA;
+		sendData = NO_DATA;
 	}
+
+	bool RecieveDataFromPC(DevicesManager &p)
+	{
+		int length, st, ed, pos;
+		String tmp = NO_DATA;
+		//clear last data
+		recieveData = NO_DATA;
+		//recieve from serial
+		while (Serial.available() > 0)
+		{
+			char currentRead = char(Serial.read());
+			recieveData += currentRead;
+			if (currentRead == END_SYM)break;
+			delay(RECIEVE_DELAY);
+		}
+		length = recieveData.length();
+		//no data exit
+		if (!length)return false;
+		//find start pos
+		for (int i = 0; i < length; i++)
+			if (recieveData.charAt(i) == START_SYM)
+			{
+				st = i;
+				break;
+			}
+		//find end pos
+		for (int i = length - 1; i >= 0; i--)
+			if (recieveData.charAt(i) == END_SYM)
+			{
+				ed = i;
+				break;
+			}
+		//cover data
+		pos = 0;
+		for (int i = st; i <= ed; i++)
+		{
+			if (recieveData.charAt(i) != START_SYM && recieveData.charAt(i) != END_SYM && recieveData.charAt(i) != FILTER)tmp += recieveData.charAt(i);
+			if (recieveData.charAt(i) == FILTER)
+			{
+				//send data to TrainManager
+				p->SetData(PCComMap[pos++], tmp.toInt());
+				//clear tmp
+				tmp = NO_DATA;
+			}
+		}
+		return true;
+	}
+	//
+	bool SendDataToPC(DevicesManager &p)
+	{
+		sendData = NO_DATA;
+		//add start symbol
+		sendData += START_SYM;
+		//add contents
+		for (int i = 0; i < TRAIN_DATA_NUMBER; i++)
+		{
+			sendData += p->GetData(PCComMap[i]);
+			sendData += FILTER;
+		}
+		//add end symbol
+		sendData += END_SYM;
+		if (!sendData.length())return false;
+		//send data to PC
+		Serial.print(sendData);
+		delay(SEND_DELAY);
+		return true;
+	}
+	//send data to HMI
+	bool SendDataToHMI(DevicesManager &p)
+	{
+		String sender = NO_DATA;
+		for (int i = 0; i < TRAIN_DATA_NUMBER; i++)
+		{
+			sender = HMIScript[HMIMap[i]] + p->GetData(PCComMap[i]);
+			if (!sender.length())return false;
+			Serial1.print(sender);
+			for (int j = 0; j < 3; j++)Serial1.write(HMI_END_SYM);
+		}
+		//
+		return true;
+	}
+};
+
+class TaskManager
+{
+private:
+	int taskCnt, nowProc, nextProc;
+public:
+	TaskManager()
+	{
+		taskCnt = 0;
+		nextProc = 0;
+	}
+	//
+	bool AddProc(TrainManager &p)
+	{
+		if (!p)return false;
+		if (taskCnt >= QUEUE_CAP)
+		{
+			Timeline[taskCnt - 1] = p;
+			return true;
+		}
+		//
+		Timeline[taskCnt++] = p;
+		return true;
+	}
+	//
+	bool GetQueueTop()
+	{
+		if (!tskCnt)return EMPTY_QUERY;
+		currentData = Timeline[0];
+		//repos
+		for (int i = 1; i < taskCnt; i++)
+			Timeline[i - 1] = Timeline[i];
+		tskCnt--;
+		return true;
+	}
+};
+
+DevicesManager Devices(devicePins, deviceType, Interrupts);
+CommunicationManager Communication;
+TaskManager Queue;
+
+void TimerInterrupt()
+{
+	Timer.stop();
+	Queue.GetQueueTop();
+	communication.SendDataToPC(currentData);
+	Communication.RecieveDataFromPC(currentData);
+	communication.SendDataToHMI(currentData);
+	Timer.start();
+}
+
+/*
+	PowerUp:interrupt0
+	PowerDown:interrupt1
+	ReserverForward:interrupt2
+	ReserverBackward:interrupt3
+	Horn:interrupt4
+	SpeedConst:interrupt5
+	Emergency:interrupt6
+	MasterKey:interrupt7
+*/
+
+void interrupt0()
+{
+	TrainManager tmp = currentData;
+	//single handle
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(REVERSER) == REVERSER_NEUTRAL)return;
+	//
+	int currentBrake = tmp.GetData(BRAKE);
+	int currentPower = tmp.GetData(POWER);
+	if (currentBrake > BRAKE_MIN)
+	{
+		tmp.SetData(BRAKE, currentBrake > BRAKE_MIN ? currentBrake - 1 : BRAKE_MIN);
+		tmp.SetData(POWER, POWER_MIN);
+	}
+	else
+	{
+		tmp.SetData(POWER, currentPower < POWER_MAX ? currentPower + 1 : POWER_MAX);
+		tmp.SetData(BRAKE, BRAKE_MIN);
+	}
+	Queue.AddProc(tmp);
+	return;
+}
+
+void interrupt1()
+{
+	TrainManager tmp = currentData;
+	//single handle
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(REVERSER) == REVERSER_NEUTRAL)return;
+	//
+	int currentBrake = tmp.GetData(BRAKE);
+	int currentPower = tmp.GetData(POWER);
+	if (currentPower > POWER_MIN)
+	{
+		tmp.SetData(POWER, currentPower > POWER_MIN ? currentPower - 1 : POWER_MIN);
+		tmp.SetData(BRAKE, BRAKE_MIN);
+	}
+	else
+	{
+		tmp.SetData(BRAKE, currentBrake < BRAKE_MAX ? currentBrake + 1 : BRAKE_MAX);
+		tmp.SetData(POWER, POWER_MIN);
+	}
+	Queue.AddProc(tmp);
+	return;
+}
+
+void interrupt2()
+{
+	TrainManager tmp = currentData;
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(POWER) != POWER_MIN)return;
+	if (Devices.GetDeviceState(2, devicePins) == ACTIVE)tmp.SetData(REVERSER, REVERSER_FORWARD);
+	else tmp.SetData(REVERSER, REVERSER_NEUTRAL);
+	Queue.AddProc(tmp);
+	return;
+}
+
+void interrupt3()
+{
+	TrainManager tmp = currentData;
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || tmp.GetData(POWER) != POWER_MIN)return;
+	if (Devices.GetDeviceState(3, devicePins) == ACTIVE)tmp.SetData(REVERSER, REVERSER_FORWARD);
+	else tmp.SetData(REVERSER, REVERSER_NEUTRAL);
+	Queue.AddProc(tmp);
+	return;
+}
+
+void interrupt4()
+{
+	TrainManager tmp = currentData;
+	if (!tmp.GetData(MasterKey))return;
+	if (Devices.GetDeviceState(4, devicePins) == ACTIVE)tmp.SetData(HORN, HORN_ON);
+	else tmp.SetData(HORN, HORN_OFF);
+	Queue.AddProc(tmp);
+	return;
+}
+
+void interrupt5()
+{
+	TrainManager tmp = currentData;
+	if (tmp.GetData(EMERGENCY) || !tmp.GetData(MasterKey) || !tmp.GetData(SPEED))return;
+	tmp.SetReversal(SPEED_CONST)
+	Queue.AddProc(tmp);
+	return;
+}
+
+void interrupt6()
+{
+	TrainManager tmp = currentData;
+	if (!tmp.GetData(MasterKey))return;
+	if (Devices.GetDeviceState(6, devicePins) == ACTIVE)tmp.SetData(EMERGENCY, EMERGENCY_ON);
+	else tmp.SetData(EMERGENCY, EMERGENCY_OFF);
+	Queue.AddProc(tmp);
+	return;
+}
+
+void interrupt6()
+{
+	TrainManager tmp = currentData;
+	if (Devices.GetDeviceState(7, devicePins) == ACTIVE)tmp.SetData(MASTER_KEY, MASTER_KEY_ON);
+	else tmp.SetData(MASTER_KEY, MASTER_KEY_OFF);
+	Queue.AddProc(tmp);
+	return;
+}
+
+void setup()
+{
+	//set Timer
+	Timer.attachInterrupt(TimerInterrupt);
+	Timer.setPeriod(TIMER_TICK);
+	Timer.start();
+}
+
+void loop()
+{
+	/*Interrupts ready!*/
 }
