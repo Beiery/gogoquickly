@@ -94,6 +94,7 @@
 #define SPEED_CONST 8
 #define MASTER_KEY 9
 #define EMERGENCY 10
+#define UPDATE_LAST_NUM 7
 #define NO_BINDING -1
 //HMI
 #define HMI_SCRIPT_NUM 11
@@ -149,6 +150,7 @@ const int devicePins[DEVICE_NUMBER] = {30, 31, 32, 33, 34, 35, 36, 37};
 const int dataDefault[TRAIN_DATA_NUMBER] = {SPEED_MIN, REVERSER_NEUTRAL, POWER_MIN, BRAKE_MIN, SIGNAL_RED, SIGNAL_DISTANCE_DE, SPEED_LIMIT_DEF, HORN_OFF, SPEED_CONST_MIN, MASTER_KEY_OFF, EMERGENCY_OFF};
 const int dataType[TRAIN_DATA_NUMBER] = {_INT, _INT, _INT, _INT, _INT, _INT, _INT, _BOOL, _INT, _BOOL, _BOOL};
 const int dataBinding[TRAIN_DATA_NUMBER] = {NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING, NO_BINDING};
+const int recieveToUpdate[UPDATE_LAST_NUM] = {SPEED, POWER, BRAKE, REVERSER, SIGNAL, SIGNAL_DISTANCE, SPEED_LIMIT};
 //communication
 const String HMIScript[HMI_SCRIPT_NUM] = { "spd.val=", "reserver.val=", "pwr.val=", "brake.val=", "sig.val=", "sigdis.val=", "spdlim.val=", "horn.val=", "speedconst.val=", "mstkey.val=", "emg.val="};
 const int HMIMap[TRAIN_DATA_NUMBER] = {SPEED, REVERSER, POWER, BRAKE, SIGNAL, SIGNAL_DISTANCE, SPEED_LIMIT, HORN, SPEED_CONST, MASTER_KEY, EMERGENCY};
@@ -351,49 +353,50 @@ public:
 class TaskManager
 {
 private:
-	int taskCnt, nowProc, nextProc;
+	int taskCnt;
 public:
 	TaskManager()
 	{
 		taskCnt = 0;
-		nextProc = 0;
 	}
 	//
-	bool AddProc(TrainManager &p)
+	void AddProc(TrainManager &p)
 	{
 		if (taskCnt >= QUEUE_CAP)
-		{
 			Timeline[taskCnt - 1] = p;
-			return true;
-		}
 		//
 		Timeline[taskCnt++] = p;
-		return true;
 	}
 	//
-	bool GetQueueTop(TrainManager &p)
+	void GetQueueTop(TrainManager &p)
 	{
-		if (!taskCnt)return EMPTY_QUERY;
+		if (!taskCnt)p = currentData;
 		p = Timeline[0];
 		//repos
 		for (int i = 1; i < taskCnt; i++)
 			Timeline[i - 1] = Timeline[i];
 		taskCnt--;
-		return true;
 	}
 	//
-	bool GetLastState(TrainManager &p)
+	void GetLastState(TrainManager &p)
 	{
 		if (!taskCnt)p = currentData;
 		else p = Timeline[taskCnt - 1];
-		return true;
 	}
 	//
-	bool SetLastState(TrainManager &p)
+	void SetLastState(TrainManager &p)
 	{
 		if (!taskCnt)currentData = p;
 		else Timeline[taskCnt - 1] = p;
-		return true;
+	}
+	//
+	void UpdateLastState(TrainManager &p)
+	{
+		if (!taskCnt)
+			p.SetNotSended();
+		else
+			for (int i = 0; i < UPDATE_LAST_NUM; i++)
+				Timeline[taskCnt - 1].SetData(recieveToUpdate[i], p.GetData(recieveToUpdate[i]));
 	}
 };
 
